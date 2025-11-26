@@ -22,6 +22,7 @@ typedef NS_ENUM(NSInteger, BPPState) {
 @property(nonatomic, retain) BluetoothPrintStreamHandler *stateStreamHandler;
 @property(nonatomic, assign) BPPState stateID;
 @property(nonatomic) NSMutableDictionary *scannedPeripherals;
+@property(nonatomic, assign) BOOL managerInitialized;
 
 @end
 
@@ -60,29 +61,6 @@ typedef NS_ENUM(NSInteger, BPPState) {
     [registrar addMethodCallDelegate:esc channel:escChannel];
     
     instance.stateID = BlueOff;
-    [Manager didUpdateState:^(NSInteger state) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            NSNumber *ret = @(BlueOff);
-            switch (state) {
-                case CBManagerStatePoweredOn:
-                    NSLog(@"Bluetooth Powered On");
-                    ret = @(BlueOn);
-                    instance.stateID = BlueOn;
-                    break;
-                case CBManagerStatePoweredOff:
-                    NSLog(@"Bluetooth Powered Off");
-                    ret = @(BlueOff);
-                    instance.stateID = BlueOff;
-                    break;
-                default:
-                    return;
-            }
-            NSDictionary *dict = [NSDictionary dictionaryWithObjectsAndKeys:ret ,@"id",nil];
-            if(instance.stateStreamHandler.sink != nil) {
-                instance.stateStreamHandler.sink([dict objectForKey:@"id"]);
-            }
-        });
-    }];
 }
 
 - (void)handleMethodCall:(FlutterMethodCall*)call result:(FlutterResult)result {
@@ -92,15 +70,19 @@ typedef NS_ENUM(NSInteger, BPPState) {
         result([@"iOS " stringByAppendingString:[[UIDevice currentDevice] systemVersion]]);
     }
     if ([@"state" isEqualToString:call.method]) {
+        [self ensureManagerInitialized];
         result([NSNumber numberWithInteger:self.stateID]);
     } else if([@"startScan" isEqualToString:call.method]) {
+        [self ensureManagerInitialized];
         [self.scannedPeripherals removeAllObjects];
         [self startScan];
         result(nil);
     } else if([@"stopScan" isEqualToString:call.method]) {
+        [self ensureManagerInitialized];
         [Manager stopScan];
         result(nil);
     } else if([@"connect" isEqualToString:call.method]) {
+        [self ensureManagerInitialized];
         [Manager stopScan];
         NSDictionary *device = [call arguments];
         @try {
@@ -186,6 +168,35 @@ typedef NS_ENUM(NSInteger, BPPState) {
             weakself.stateStreamHandler.sink([dict objectForKey:@"id"]);
         }
     });
+}
+
+- (void)ensureManagerInitialized {
+    if (self.managerInitialized) return;
+    self.managerInitialized = YES;
+    
+    [Manager didUpdateState:^(NSInteger state) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSNumber *ret = @(BlueOff);
+            switch (state) {
+                case CBManagerStatePoweredOn:
+                    NSLog(@"Bluetooth Powered On");
+                    ret = @(BlueOn);
+                    self.stateID = BlueOn;
+                    break;
+                case CBManagerStatePoweredOff:
+                    NSLog(@"Bluetooth Powered Off");
+                    ret = @(BlueOff);
+                    self.stateID = BlueOff;
+                    break;
+                default:
+                    return;
+            }
+            NSDictionary *dict = [NSDictionary dictionaryWithObjectsAndKeys:ret ,@"id",nil];
+            if(self.stateStreamHandler.sink != nil) {
+                self.stateStreamHandler.sink([dict objectForKey:@"id"]);
+            }
+        });
+    }];
 }
 
 @end
