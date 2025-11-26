@@ -15,6 +15,8 @@ typedef NS_ENUM(NSInteger, BPPState) {
     DeviceDisconnected
 };
 
+static BOOL hasPreparedBluetoothManager = NO;
+
 @interface BluetoothPrintPlusPlugin ()
 
 @property(nonatomic, retain) NSObject<FlutterPluginRegistrar> *registrar;
@@ -22,11 +24,42 @@ typedef NS_ENUM(NSInteger, BPPState) {
 @property(nonatomic, retain) BluetoothPrintStreamHandler *stateStreamHandler;
 @property(nonatomic, assign) BPPState stateID;
 @property(nonatomic) NSMutableDictionary *scannedPeripherals;
-@property(nonatomic, assign) BOOL managerInitialized;
 
 @end
 
 @implementation BluetoothPrintPlusPlugin
+
+- (void)prepareBluetoothManagerIfNeeded {
+    if (hasPreparedBluetoothManager) {
+        return;
+    }
+    hasPreparedBluetoothManager = YES;
+    WeakSelf(self);
+    [Manager didUpdateState:^(NSInteger state) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSNumber *ret = @(BlueOff);
+            switch (state) {
+                case CBManagerStatePoweredOn:
+                    NSLog(@"Bluetooth Powered On");
+                    ret = @(BlueOn);
+                    weakself.stateID = BlueOn;
+                    break;
+                case CBManagerStatePoweredOff:
+                    NSLog(@"Bluetooth Powered Off");
+                    ret = @(BlueOff);
+                    weakself.stateID = BlueOff;
+                    break;
+                default:
+                    return;
+            }
+            NSDictionary *dict = [NSDictionary dictionaryWithObjectsAndKeys:ret ,@"id",nil];
+            if(weakself.stateStreamHandler.sink != nil) {
+                weakself.stateStreamHandler.sink([dict objectForKey:@"id"]);
+            }
+        });
+    }];
+}
+
 + (void)registerWithRegistrar:(NSObject<FlutterPluginRegistrar>*)registrar {
     FlutterMethodChannel* channel = [FlutterMethodChannel
                                      methodChannelWithName:@"bluetooth_print_plus/methods"
@@ -70,19 +103,19 @@ typedef NS_ENUM(NSInteger, BPPState) {
         result([@"iOS " stringByAppendingString:[[UIDevice currentDevice] systemVersion]]);
     }
     if ([@"state" isEqualToString:call.method]) {
-        [self ensureManagerInitialized];
         result([NSNumber numberWithInteger:self.stateID]);
     } else if([@"startScan" isEqualToString:call.method]) {
-        [self ensureManagerInitialized];
+        [self prepareBluetoothManagerIfNeeded];
         [self.scannedPeripherals removeAllObjects];
         [self startScan];
         result(nil);
     } else if([@"stopScan" isEqualToString:call.method]) {
-        [self ensureManagerInitialized];
-        [Manager stopScan];
+        if (hasPreparedBluetoothManager) {
+            [Manager stopScan];
+        }
         result(nil);
     } else if([@"connect" isEqualToString:call.method]) {
-        [self ensureManagerInitialized];
+        [self prepareBluetoothManagerIfNeeded];
         [Manager stopScan];
         NSDictionary *device = [call arguments];
         @try {
@@ -98,8 +131,10 @@ typedef NS_ENUM(NSInteger, BPPState) {
             result(e);
         }
     } else if([@"disconnect" isEqualToString:call.method]) {
-        @try {
+        if (hasPreparedBluetoothManager) {
             [Manager close];
+        }
+        @try {
             result(nil);
         } @catch(FlutterError *e) {
             result(e);
@@ -111,6 +146,10 @@ typedef NS_ENUM(NSInteger, BPPState) {
             result(e);
         }
     } else if([@"write" isEqualToString:call.method]) {
+        if (!hasPreparedBluetoothManager) {
+            result(nil);
+            return;
+        }
         @try {
             NSDictionary *args = [call arguments];
             FlutterStandardTypedData *command = [args objectForKey:@"data"];
@@ -168,35 +207,6 @@ typedef NS_ENUM(NSInteger, BPPState) {
             weakself.stateStreamHandler.sink([dict objectForKey:@"id"]);
         }
     });
-}
-
-- (void)ensureManagerInitialized {
-    if (self.managerInitialized) return;
-    self.managerInitialized = YES;
-    
-    [Manager didUpdateState:^(NSInteger state) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            NSNumber *ret = @(BlueOff);
-            switch (state) {
-                case CBManagerStatePoweredOn:
-                    NSLog(@"Bluetooth Powered On");
-                    ret = @(BlueOn);
-                    self.stateID = BlueOn;
-                    break;
-                case CBManagerStatePoweredOff:
-                    NSLog(@"Bluetooth Powered Off");
-                    ret = @(BlueOff);
-                    self.stateID = BlueOff;
-                    break;
-                default:
-                    return;
-            }
-            NSDictionary *dict = [NSDictionary dictionaryWithObjectsAndKeys:ret ,@"id",nil];
-            if(self.stateStreamHandler.sink != nil) {
-                self.stateStreamHandler.sink([dict objectForKey:@"id"]);
-            }
-        });
-    }];
 }
 
 @end
